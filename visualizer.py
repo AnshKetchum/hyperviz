@@ -60,6 +60,13 @@ class Visualizer:
 
     def add(self, trajectory: Trajectory):
         self.collection.add(trajectory)
+    
+    def load(self, visualization_tensor_path: str):
+        assert os.path.exists(visualization_tensor_path)
+        self.collection.load(visualization_tensor_path)
+
+    def save(self):
+        self.collection.save(os.path.join(self.save_dir, "visualization_tensors.pth"))
 
     def visualize(self):
         os.makedirs(self.save_dir, exist_ok=True)
@@ -113,6 +120,9 @@ class Visualizer:
         plt.tight_layout()
         plt.savefig(os.path.join(self.save_dir, "hidden_state_pca.png"), dpi=150)
         plt.close()
+
+        # dump tensors
+        self.save()
 
         
 def hidden_state_angle_analysis(trajectories: TrajectoryCollection):
