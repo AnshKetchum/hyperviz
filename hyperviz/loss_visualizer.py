@@ -88,10 +88,10 @@ class LossVisualizer:
         total_evals = self.grid_points * self.grid_points
         t0 = time.time()
 
-        print(f"  grid:        {self.grid_points}×{self.grid_points}  ({total_evals} evaluations)")
-        print(f"  eval_batches per point: {self.eval_batches}")
-        print(f"  param count: {n_params:,}")
-        print()
+        print(f"  grid:        {self.grid_points}×{self.grid_points}  ({total_evals} evaluations)", flush=True)
+        print(f"  eval_batches per point: {self.eval_batches}", flush=True)
+        print(f"  param count: {n_params:,}", flush=True)
+        print(flush=True)
 
         loss_min = float("inf")
         loss_max = float("-inf")
@@ -114,10 +114,11 @@ class LossVisualizer:
             print(
                 f"  row {i+1:2d}/{self.grid_points}  "
                 f"loss=[{row_losses.min():.4f}, {row_losses.max():.4f}]  "
-                f"row={row_time:.1f}s  elapsed={elapsed:.1f}s  ETA={eta:.1f}s"
+                f"row={row_time:.1f}s  elapsed={elapsed:.1f}s  ETA={eta:.1f}s",
+                flush=True,
             )
 
-        print(f"\n  sweep done — overall loss range [{loss_min:.4f}, {loss_max:.4f}]")
+        print(f"\n  sweep done — overall loss range [{loss_min:.4f}, {loss_max:.4f}]", flush=True)
         return alphas, betas, loss_grid
 
     # ------------------------------------------------------------------ #
@@ -125,7 +126,7 @@ class LossVisualizer:
     # ------------------------------------------------------------------ #
 
     def _plot_surface(self, alphas, betas, loss_grid):
-        print("  rendering static surface + contour …")
+        print("  rendering static surface + contour …", flush=True)
         A, B = np.meshgrid(alphas, betas, indexing='ij')
         Z = loss_grid
 
@@ -188,7 +189,7 @@ class LossVisualizer:
 
     def _plot_1d_slices(self, alphas, betas, loss_grid):
         """1-D loss slices along each axis through θ* (centre row/col)."""
-        print("  rendering 1-D slices …")
+        print("  rendering 1-D slices …", flush=True)
         mid = self.grid_points // 2
 
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
@@ -220,7 +221,7 @@ class LossVisualizer:
 
     def _plot_interactive(self, alphas, betas, loss_grid):
         """Save a self-contained interactive HTML file with a rotatable 3D surface."""
-        print("  rendering interactive 3D HTML …")
+        print("  rendering interactive 3D HTML …", flush=True)
         try:
             import plotly.graph_objects as go
         except ImportError:
@@ -297,29 +298,29 @@ class LossVisualizer:
         model.to(device)
 
         n_params = sum(p.numel() for p in model.parameters())
-        print(f"[LossVisualizer] starting — {n_params:,} parameters")
-        print(f"  save_dir:    {self.save_dir}")
-        print(f"  grid:        {self.grid_points}×{self.grid_points}, range ±{self.grid_range}")
-        print(f"  eval_batches: {self.eval_batches}")
+        print(f"[LossVisualizer] starting — {n_params:,} parameters", flush=True)
+        print(f"  save_dir:    {self.save_dir}", flush=True)
+        print(f"  grid:        {self.grid_points}×{self.grid_points}, range ±{self.grid_range}", flush=True)
+        print(f"  eval_batches: {self.eval_batches}", flush=True)
 
-        print("\n[LossVisualizer] snapshotting weights to CPU …")
+        print("\n[LossVisualizer] snapshotting weights to CPU …", flush=True)
         original_params = [p.detach().cpu().clone() for p in model.parameters()]
 
-        print("\n[LossVisualizer] generating filter-normalized random directions …")
+        print("\n[LossVisualizer] generating filter-normalized random directions …", flush=True)
         dx = make_random_direction(original_params)
         dy = make_random_direction(original_params)
 
-        print("\n[LossVisualizer] sweeping grid …")
+        print("\n[LossVisualizer] sweeping grid …", flush=True)
         t_sweep = time.time()
         alphas, betas, loss_grid = self._sweep_grid(
             model, original_params, dx, dy, dataloader, device
         )
         print(f"  total sweep time: {time.time() - t_sweep:.1f}s")
 
-        print("\n[LossVisualizer] restoring original weights …")
+        print("\n[LossVisualizer] restoring original weights …", flush=True)
         self._restore_params(model, original_params)
 
-        print("\n[LossVisualizer] saving plots …")
+        print("\n[LossVisualizer] saving plots …", flush=True)
         self._plot_surface(alphas, betas, loss_grid)
         self._plot_1d_slices(alphas, betas, loss_grid)
         if self.save_interactive_visualization:
@@ -333,4 +334,4 @@ class LossVisualizer:
         }, tensor_path)
         print(f"  saved → {tensor_path}")
 
-        print("\n[LossVisualizer] done.")
+        print("\n[LossVisualizer] done.", flush=True)
