@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 import math
-from .visualizer import Trajectory, TrajectoryCollection, Visualizer
+from hyperviz.visualizer import Trajectory, TrajectoryCollection, Visualizer
 
 
 # ---------------------------------------------------------------------------

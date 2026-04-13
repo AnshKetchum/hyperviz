@@ -5,7 +5,7 @@ import os
 import matplotlib.pyplot as plt
 
 from .trajectory import Trajectory, TrajectoryCollection
-from analysis import hidden_state_angle_analysis, hidden_state_delta_analysis, hidden_state_pca_analysis, hidden_state_relative_norm_analysis
+from .analysis import hidden_state_angle_analysis, hidden_state_delta_analysis, hidden_state_pca_analysis, hidden_state_relative_norm_analysis
 
 """ 
 
