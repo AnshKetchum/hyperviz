@@ -13,6 +13,8 @@ class Trajectory:
         for t in hidden_states:
             self.add(t)
 
+    def __len__(self):
+        return len(self.hidden_states)
 
     def add(self, tensor: torch.Tensor):
         assert all([tensor.shape == t.shape for t in self.hidden_states])
@@ -35,6 +37,9 @@ class TrajectoryCollection:
     def save(self, filepath: str):
         data = {"trajectories": [traj.get() for traj in self.trajectories]}
         torch.save(data, filepath)
+    
+    def __len__(self):
+        return len(self.trajectories)
 
     @classmethod
     def load(cls, filepath: str) -> "TrajectoryCollection":

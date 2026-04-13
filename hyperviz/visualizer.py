@@ -29,11 +29,15 @@ class Visualizer:
     def load(self, visualization_tensor_path: str):
         assert os.path.exists(visualization_tensor_path)
         self.collection.load(visualization_tensor_path)
+    
+    def clear(self):
+        self.collection = TrajectoryCollection(trajectories=[])
 
     def save(self):
         self.collection.save(os.path.join(self.save_dir, "visualization_tensors.pth"))
 
     def visualize(self):
+        print("Visualizing", len(self.collection), "trajectories with lens", [len(s) for s in self.collection.get()])
         os.makedirs(self.save_dir, exist_ok=True)
 
         angles  = hidden_state_angle_analysis(self.collection)
@@ -45,6 +49,7 @@ class Visualizer:
         _, ax = plt.subplots(figsize=(7, 5))
         for a in angles:
             ax.plot(a, color="steelblue", alpha=0.05)
+            ax.plot(a, color="steelblue", marker="o", markersize=3, linestyle="none", alpha=0.15, zorder=3)
         ax.set_title("hidden state angle vs layer")
         ax.set_xlabel("step")
         ax.set_ylabel("angle (rad)")
@@ -56,6 +61,7 @@ class Visualizer:
         _, ax = plt.subplots(figsize=(7, 5))
         for d in deltas:
             ax.plot(d, color="darkorange", alpha=0.05)
+            ax.plot(d, color="darkorange", marker="o", markersize=3, linestyle="none", alpha=0.15, zorder=3)
         ax.set_title("hidden state difference angle vs layer")
         ax.set_xlabel("step")
         ax.set_ylabel("angle (rad)")
@@ -67,6 +73,7 @@ class Visualizer:
         _, ax = plt.subplots(figsize=(7, 5))
         for n in norms:
             ax.plot(n, color="seagreen", alpha=0.05)
+            ax.plot(n, color="seagreen", marker="o", markersize=3, linestyle="none", alpha=0.15, zorder=3)
         ax.set_title("hidden state relative norm vs layer")
         ax.set_xlabel("step")
         ax.set_ylabel("||h_i||_F / ||h_0||_F")
@@ -78,7 +85,7 @@ class Visualizer:
         _, ax = plt.subplots(figsize=(7, 5))
         for proj in pca:
             coords = proj.numpy()
-            ax.scatter(coords[:, 0], coords[:, 1], color="mediumpurple", s=4, alpha=0.05)
+            ax.scatter(coords[:, 0], coords[:, 1], color="mediumpurple", s=4, alpha=0.15, zorder=3)
         ax.set_title("hidden state PC1 vs PC2")
         ax.set_xlabel("PC1")
         ax.set_ylabel("PC2")
