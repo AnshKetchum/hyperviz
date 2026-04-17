@@ -75,18 +75,32 @@ class SpectralVisualizer:
         plt.close()
         print(f"  saved → {out}")
 
+    @staticmethod
+    def _cumulative_energy(svs: torch.Tensor) -> torch.Tensor:
+        """Cumulative normalized energy: cumsum(svs) / sum(svs), svs sorted descending."""
+        sorted_svs = svs.sort(descending=True).values
+        return sorted_svs.cumsum(0) / sorted_svs.sum()
+
     def _plot_per_matrix(self, name: str, svs: torch.Tensor, out_dir: str):
         vals = svs.numpy()
         n = len(vals)
+        cum_energy = self._cumulative_energy(svs).numpy()
 
         fig, ax = plt.subplots(figsize=(max(6, n // 4), 4))
         fig.patch.set_facecolor("#0d0d0d")
         ax.set_facecolor("#111111")
 
         x = range(n)
-        ax.bar(x, vals, color="#5b8dee", edgecolor="none", alpha=0.85)
+        ax.bar(x, vals, color="#5b8dee", edgecolor="none", alpha=0.75, label="singular value")
         ax.axhline(float(vals.mean()), color="cyan", linewidth=1.0,
                    linestyle="--", label=f"mean={vals.mean():.3f}")
+
+        ax2 = ax.twinx()
+        ax2.plot(x, cum_energy, color="#ff6b35", linewidth=1.5, label="cumulative energy")
+        ax2.set_ylim(0, 1.05)
+        ax2.set_ylabel("Cumulative normalized energy", color="#aaaaaa")
+        ax2.tick_params(colors="#888888")
+        ax2.spines["right"].set_edgecolor("#333333")
 
         ax.set_title(f"Singular values — {name}", color="white", fontsize=10)
         ax.set_xlabel("Index (largest → smallest)", color="#aaaaaa")
@@ -94,8 +108,11 @@ class SpectralVisualizer:
         ax.tick_params(colors="#888888")
         for spine in ax.spines.values():
             spine.set_edgecolor("#333333")
-        ax.legend(facecolor="#1a1a1a", edgecolor="#444444",
-                  labelcolor="white", fontsize=8)
+
+        lines1, labels1 = ax.get_legend_handles_labels()
+        lines2, labels2 = ax2.get_legend_handles_labels()
+        ax.legend(lines1 + lines2, labels1 + labels2,
+                  facecolor="#1a1a1a", edgecolor="#444444", labelcolor="white", fontsize=8)
 
         plt.tight_layout()
         fname = self._safe_filename(name) + ".png"
