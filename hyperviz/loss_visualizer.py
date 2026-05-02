@@ -78,47 +78,68 @@ class LossVisualizer:
             for p, w in zip(model.parameters(), original_params):
                 p.copy_(w)
 
-    def _sweep_grid(self, model, original_params, dx, dy, loader, device):
-        """Sweep the α×β grid and return (alphas, betas, loss_grid)."""
+    def _sweep_grid(self, model, original_params, dx, dy, loader, device,
+                    rank=0, world_size=1, process_group=None):
+        """Sweep the α×β grid and return (alphas, betas, loss_grid).
+
+        When world_size > 1 the grid cells are partitioned across ranks by
+        strided assignment (cell k → rank k % world_size).  Each rank fills
+        only its assigned cells (others remain 0), then all partial grids are
+        summed via all_gather_object.  Only rank 0 gets the full loss_grid;
+        other ranks receive None.
+        """
+        import torch.distributed as dist
+
         alphas = np.linspace(-self.grid_range, self.grid_range, self.grid_points)
         betas  = np.linspace(-self.grid_range, self.grid_range, self.grid_points)
-        loss_grid = np.zeros((self.grid_points, self.grid_points))
 
-        n_params = sum(p.numel() for p in model.parameters())
-        total_evals = self.grid_points * self.grid_points
+        total_cells = self.grid_points * self.grid_points
+        my_cells = [k for k in range(total_cells) if k % world_size == rank]
+
+        if rank == 0:
+            n_params = sum(p.numel() for p in model.parameters())
+            print(f"  grid:        {self.grid_points}×{self.grid_points}  ({total_cells} evaluations, "
+                  f"{len(my_cells)} per rank × {world_size} rank(s))", flush=True)
+            print(f"  eval_batches per point: {self.eval_batches}", flush=True)
+            print(f"  param count: {n_params:,}", flush=True)
+            print(flush=True)
+
+        partial_grid = np.zeros((self.grid_points, self.grid_points))
         t0 = time.time()
 
-        print(f"  grid:        {self.grid_points}×{self.grid_points}  ({total_evals} evaluations)", flush=True)
-        print(f"  eval_batches per point: {self.eval_batches}", flush=True)
-        print(f"  param count: {n_params:,}", flush=True)
-        print(flush=True)
-
-        loss_min = float("inf")
-        loss_max = float("-inf")
-
-        for i, alpha in enumerate(alphas):
-            row_t0 = time.time()
-            for j, beta in enumerate(betas):
-                loss = self._perturb_and_eval(
-                    model, original_params, dx, dy, alpha, beta, loader, device
-                )
-                loss_grid[i, j] = loss
-                loss_min = min(loss_min, loss)
-                loss_max = max(loss_max, loss)
-
-            elapsed   = time.time() - t0
-            row_time  = time.time() - row_t0
-            frac      = (i + 1) / self.grid_points
-            eta       = elapsed / frac - elapsed
-            row_losses = loss_grid[i]
-            print(
-                f"  row {i+1:2d}/{self.grid_points}  "
-                f"loss=[{row_losses.min():.4f}, {row_losses.max():.4f}]  "
-                f"row={row_time:.1f}s  elapsed={elapsed:.1f}s  ETA={eta:.1f}s",
-                flush=True,
+        for idx, k in enumerate(my_cells):
+            ci, cj = k // self.grid_points, k % self.grid_points
+            alpha, beta = float(alphas[ci]), float(betas[cj])
+            loss = self._perturb_and_eval(
+                model, original_params, dx, dy, alpha, beta, loader, device
             )
+            partial_grid[ci, cj] = loss
 
-        print(f"\n  sweep done — overall loss range [{loss_min:.4f}, {loss_max:.4f}]", flush=True)
+            if rank == 0:
+                elapsed = time.time() - t0
+                frac = (idx + 1) / max(len(my_cells), 1)
+                eta = elapsed / frac - elapsed
+                print(
+                    f"  cell {idx+1:3d}/{len(my_cells)}  ({ci},{cj})  "
+                    f"loss={loss:.4f}  elapsed={elapsed:.1f}s  ETA={eta:.1f}s",
+                    flush=True,
+                )
+
+        if world_size > 1 and dist.is_initialized():
+            all_grids = [None] * world_size
+            dist.all_gather_object(all_grids, partial_grid, group=process_group)
+            if rank == 0:
+                # Each rank has filled its assigned cells (unassigned = 0); sum gives full grid.
+                loss_grid = sum(all_grids)
+                print(f"\n  sweep done — overall loss range "
+                      f"[{loss_grid.min():.4f}, {loss_grid.max():.4f}]", flush=True)
+            else:
+                loss_grid = None
+        else:
+            loss_grid = partial_grid
+            print(f"\n  sweep done — overall loss range "
+                  f"[{loss_grid.min():.4f}, {loss_grid.max():.4f}]", flush=True)
+
         return alphas, betas, loss_grid
 
     # ------------------------------------------------------------------ #
@@ -281,7 +302,7 @@ class LossVisualizer:
     # Public API                                                           #
     # ------------------------------------------------------------------ #
 
-    def visualize(self, model, dataloader, device):
+    def visualize(self, model, dataloader, device, process_group=None):
         """
         Run the full loss-landscape visualization.
 
@@ -289,49 +310,80 @@ class LossVisualizer:
         restores the original weights, then saves plots and the raw
         loss grid to self.save_dir.
 
+        When torch.distributed is initialized the sweep is automatically
+        distributed: rank 0 generates the random directions, broadcasts
+        them to all ranks, each rank evaluates its strided partition of
+        grid cells, and results are gathered back to rank 0 for plotting.
+
         Args:
-            model:      nn.Module to analyze (must already be trained).
-            dataloader: DataLoader supplying (inputs, targets) pairs.
-            device:     torch.device to run inference on.
+            model:         nn.Module to analyze (must already be trained).
+            dataloader:    DataLoader supplying (inputs, targets) pairs.
+            device:        torch.device to run inference on.
+            process_group: Optional dist process group (uses default if None).
         """
-        os.makedirs(self.save_dir, exist_ok=True)
-        model.to(device)
+        try:
+            import torch.distributed as dist
+            _dist_on = dist.is_available() and dist.is_initialized()
+        except ImportError:
+            _dist_on = False
 
-        n_params = sum(p.numel() for p in model.parameters())
-        print(f"[LossVisualizer] starting — {n_params:,} parameters", flush=True)
-        print(f"  save_dir:    {self.save_dir}", flush=True)
-        print(f"  grid:        {self.grid_points}×{self.grid_points}, range ±{self.grid_range}", flush=True)
-        print(f"  eval_batches: {self.eval_batches}", flush=True)
+        rank       = dist.get_rank(process_group)       if _dist_on else 0
+        world_size = dist.get_world_size(process_group) if _dist_on else 1
 
-        print("\n[LossVisualizer] snapshotting weights to CPU …", flush=True)
+        if rank == 0:
+            os.makedirs(self.save_dir, exist_ok=True)
+            n_params = sum(p.numel() for p in model.parameters())
+            print(f"[LossVisualizer] starting — {n_params:,} parameters  world_size={world_size}", flush=True)
+            print(f"  save_dir:     {self.save_dir}", flush=True)
+            print(f"  grid:         {self.grid_points}×{self.grid_points}, range ±{self.grid_range}", flush=True)
+            print(f"  eval_batches: {self.eval_batches}", flush=True)
+
+        # All ranks snapshot their own (identical) weights independently.
+        if rank == 0:
+            print("\n[LossVisualizer] snapshotting weights to CPU …", flush=True)
         original_params = [p.detach().cpu().clone() for p in model.parameters()]
 
-        print("\n[LossVisualizer] generating filter-normalized random directions …", flush=True)
-        dx = make_random_direction(original_params)
-        dy = make_random_direction(original_params)
+        # Rank 0 generates random directions; broadcast so all ranks use the same ones.
+        if rank == 0:
+            print("\n[LossVisualizer] generating filter-normalized random directions …", flush=True)
+            dx = make_random_direction(original_params)
+            dy = make_random_direction(original_params)
+        else:
+            dx = dy = None
 
-        print("\n[LossVisualizer] sweeping grid …", flush=True)
+        if _dist_on and world_size > 1:
+            obj = [dx, dy]
+            dist.broadcast_object_list(obj, src=0, group=process_group)
+            dx, dy = obj
+
+        if rank == 0:
+            print("\n[LossVisualizer] sweeping grid …", flush=True)
         t_sweep = time.time()
         alphas, betas, loss_grid = self._sweep_grid(
-            model, original_params, dx, dy, dataloader, device
+            model, original_params, dx, dy, dataloader, device,
+            rank=rank, world_size=world_size, process_group=process_group,
         )
-        print(f"  total sweep time: {time.time() - t_sweep:.1f}s")
+        if rank == 0:
+            print(f"  total sweep time: {time.time() - t_sweep:.1f}s", flush=True)
 
-        print("\n[LossVisualizer] restoring original weights …", flush=True)
+        # All ranks restore their local weights.
+        if rank == 0:
+            print("\n[LossVisualizer] restoring original weights …", flush=True)
         self._restore_params(model, original_params)
 
-        print("\n[LossVisualizer] saving plots …", flush=True)
-        self._plot_surface(alphas, betas, loss_grid)
-        self._plot_1d_slices(alphas, betas, loss_grid)
-        if self.save_interactive_visualization:
-            self._plot_interactive(alphas, betas, loss_grid)
+        # Only rank 0 plots and saves.
+        if rank == 0:
+            print("\n[LossVisualizer] saving plots …", flush=True)
+            self._plot_surface(alphas, betas, loss_grid)
+            self._plot_1d_slices(alphas, betas, loss_grid)
+            if self.save_interactive_visualization:
+                self._plot_interactive(alphas, betas, loss_grid)
 
-        tensor_path = os.path.join(self.save_dir, "loss_grid.pth")
-        torch.save({
-            "alphas":    torch.tensor(alphas),
-            "betas":     torch.tensor(betas),
-            "loss_grid": torch.tensor(loss_grid),
-        }, tensor_path)
-        print(f"  saved → {tensor_path}")
-
-        print("\n[LossVisualizer] done.", flush=True)
+            tensor_path = os.path.join(self.save_dir, "loss_grid.pth")
+            torch.save({
+                "alphas":    torch.tensor(alphas),
+                "betas":     torch.tensor(betas),
+                "loss_grid": torch.tensor(loss_grid),
+            }, tensor_path)
+            print(f"  saved → {tensor_path}")
+            print("\n[LossVisualizer] done.", flush=True)
